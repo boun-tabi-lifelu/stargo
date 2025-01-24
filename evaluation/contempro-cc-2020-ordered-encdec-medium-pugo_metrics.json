@@ -1,0 +1,8 @@
+{
+  "fmax": 0.6620772888703891,
+  "threshold": 0.36,
+  "smin": 6.549208648164569,
+  "aupr": 0.6323024593298958,
+  "avg_auc": 0.9243022033161309,
+  "model": "contempro-cc-2020-ordered-encdec-medium-pugo"
+}

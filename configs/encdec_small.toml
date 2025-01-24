@@ -1,0 +1,41 @@
+[train]
+# Data paths and configuration
+data_dir = "datasets/pfresgo"
+go_embed_file = "ontology.embeddings.npy"
+protein_embed_file = "per_residue_embeddings.h5"
+subontology = "molecular_function"
+go_release = "2024"
+
+# Compute settings
+use_tpu = true
+prepare_data = false
+dm_num_workers = 10
+bf16_precision = true
+
+# Training hyperparameters
+batch_size = 8
+learning_rate = 1e-4
+weight_decay = 0.01
+max_epochs = 100
+
+[model]
+# Model type
+name = "bert"
+decoder = true
+
+# Architecture configuration
+hidden_dim = 128
+intermediate_size = 1024
+num_encoder_layers = 3
+num_decoder_layers = 3
+num_attention_heads = 4
+
+# Input dimensions
+go_input_dim = 200
+seq_input_dim = 1024
+
+# Regularization and activation
+hidden_dropout_prob = 0.1
+attention_probs_dropout_prob = 0.1
+hidden_act = "gelu"
+layer_norm_eps = 1e-12

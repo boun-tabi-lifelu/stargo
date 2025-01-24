@@ -1,0 +1,7 @@
+{
+  "Micro AUPR": 0.44872268899019957,
+  "Macro AUPR": 0.36603210335039454,
+  "AUC": 0.9892929301390522,
+  "Fmax": 0.6529722178956096,
+  "model": "contempro-cc-2020-anc2vec-ordered-encdec-medium"
+}

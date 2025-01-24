@@ -1,0 +1,7 @@
+{
+  "Micro AUPR": 0.6325189742188904,
+  "Macro AUPR": 0.5765825347507806,
+  "AUC": 0.994531382473404,
+  "Fmax": 0.6695510938542912,
+  "model": "contempro-mf-2020-encoder-medium"
+}

@@ -1,0 +1,34 @@
+[train]
+# Data paths and configuration
+data_dir = "datasets/pfresgo"
+go_embed_file = "ontology.embeddings.npy"
+protein_embed_file = "per_residue_embeddings.h5"
+subontology = "cellular_component"
+go_release = "2024"
+order_go_terms = true
+
+# Compute settings
+use_tpu = false
+prepare_data = false
+dm_num_workers = 0
+bf16_precision = true
+
+# Training hyperparameters
+batch_size = 32
+learning_rate = 6e-4
+weight_decay = 0.01
+max_epochs = 1000
+early_stopping = 20
+
+[model]
+# Model type
+name = "mlp"
+
+# Input dimensions
+go_input_dim = 200
+seq_input_dim = 1024
+
+hidden_layers = [512, 256, 128]
+dropout = 0.1
+activation = "gelu"
+
