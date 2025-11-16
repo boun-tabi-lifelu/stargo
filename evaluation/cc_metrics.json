@@ -1,7 +1,0 @@
-{
-  "Fmax": 0.6737,
-  "Micro AUPR": 0.4297,
-  "Macro AUPR": 0.3612,
-  "AUC": 0.8841,
-  "model": "pfresgo-cc"
-}

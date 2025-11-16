@@ -39,6 +39,7 @@ class BERTBasedModel(nn.Module):
             _attn_implementation="sdpa"
         )
 
+
         # Encoder (sequence)
         self.encoder = BertEncoder(bert_config)
 
@@ -77,9 +78,12 @@ class BERTBasedModel(nn.Module):
 
         if attention_mask_seq_emb is not None and attention_mask_seq_emb.ndim == 2:
             attention_mask_seq_emb = attention_mask_seq_emb[:, None, None, :]
-
             attention_mask_seq_emb = attention_mask_seq_emb.to(dtype=seq_emb.dtype)
-            attention_mask_seq_emb = (1.0 - attention_mask_seq_emb) * torch.finfo(seq_emb.dtype).min
+            attention_mask_seq_emb = torch.where(
+                attention_mask_seq_emb == 1.0,
+                0.0,
+                torch.finfo(seq_emb.dtype).min,
+            )
 
         if attention_mask_go_emb is None and self.config.decoder is False:
             attention_mask_go_emb = torch.ones(batch_size, terms_len, device=go_emb.device)
@@ -99,7 +103,11 @@ class BERTBasedModel(nn.Module):
                 attention_mask_go_emb = repeat(attention_mask_go_emb, 'b s -> b 1 (k 1) s', k=terms_len)
 
             attention_mask_go_emb = attention_mask_go_emb.to(dtype=go_emb.dtype)
-            attention_mask_go_emb = (1.0 - attention_mask_go_emb) * torch.finfo(go_emb.dtype).min
+            attention_mask_go_emb = torch.where(
+                attention_mask_go_emb == 1.0,
+                0.0,
+                torch.finfo(go_emb.dtype).min,
+            )
 
         # Encode sequence
         encoder_outputs = self.encoder(

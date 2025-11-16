@@ -4,7 +4,7 @@ data_dir = "datasets/pfresgo"
 go_embed_file = "ontology.embeddings.npy"
 protein_embed_file = "per_residue_embeddings.h5"
 subontology = "cellular_component"
-go_release = "2024"
+go_release = "2020"
 order_go_terms = true
 
 # Compute settings

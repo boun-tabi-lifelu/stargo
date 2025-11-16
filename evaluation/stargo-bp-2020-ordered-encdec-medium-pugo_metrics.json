@@ -1,0 +1,8 @@
+{
+  "fmax": 0.4298854005427657,
+  "threshold": 0.31,
+  "smin": 23.62071199040043,
+  "aupr": 0.38715351400826303,
+  "avg_auc": 0.8719170763801074,
+  "model": "stargo-bp-2020-ordered-encdec-medium-pugo"
+}

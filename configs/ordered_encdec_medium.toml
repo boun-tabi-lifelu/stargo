@@ -3,8 +3,8 @@
 data_dir = "datasets/pfresgo"
 go_embed_file = "ontology.embeddings.npy"
 protein_embed_file = "per_residue_embeddings.h5"
-subontology = "cellular_component"
-go_release = "2024"
+subontology = "cellular_component" # overridden in train.py CLI calls
+go_release = "2020" # overridden in train.py CLI calls
 order_go_terms = true
 
 # Compute settings

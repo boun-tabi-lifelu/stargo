@@ -1,3 +1,4 @@
+from re import I
 import sys
 from collections import deque
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ import lightning as pl
 import networkx as nx
 import numpy as np
 import pandas as pd
+from sympy import false
 import torch
 import wget
 from goatools.obo_parser import GODag
@@ -19,26 +21,25 @@ sys.path.append("..")
 from util import logger
 
 FIXED_GO_RELEASE_OLD = "https://release.geneontology.org/2020-09-10/ontology/go-basic.obo"
-FIXED_GO_RELEASE_NEW = "https://release.geneontology.org/2024-09-08/ontology/go-basic.obo"
-
-PFRESGO_DATA_URL = "https://github.com/BioColLab/PFresGO/blob/43d7abe4752a1cf8afb22cc41b349379e6018284/Datasets/"
-
 GLOBAL_RESIDUE_EMB_CACHE = {}
-
 DEFAULT_MAX_SEQ_LENGTH = 1024
 
 @dataclass
 class ProteinGoSample:
-    """Data structure for a single protein-GO term sample"""
     protein_id: str
-    """Residue embeddings, shape: (seq_len, seq_emb_size) dtype=float"""
+    """Data structure for a single protein-GO term sample"""
+
     residue_embeddings: np.ndarray
-    """GO annotations, (num_go_terms,) dtype=int"""
+    """Residue embeddings, shape: (seq_len, seq_emb_size) dtype=float"""
+
     go_annotations: np.ndarray
-    """GO embeddings, (num_go_terms, go_emb_size) dtype=float"""
+    """GO annotations, (num_go_terms,) dtype=int"""
+
     go_embeddings: np.ndarray
-    """AA sequence, optional"""
+    """GO embeddings, (num_go_terms, go_emb_size) dtype=float"""
+
     sequence: Optional[str] = None
+    """AA sequence, optional"""
 
 class LazyH5Dict:
     """Dictionary-like object that lazily loads embeddings from H5 file"""
@@ -48,14 +49,11 @@ class LazyH5Dict:
 
     def __getitem__(self, protein_id: str) -> np.ndarray:
         with h5py.File(self.h5_path, 'r') as f:
-            # Handle different protein ID formats for PFresGO vs PUGO
-            key = f"{protein_id} nrPDB" if not self.is_pugo else protein_id
-            return f[key][:1024]  # Truncate to max length
+            return f[protein_id][:1024]  # Truncate to max length
 
     def __contains__(self, protein_id: str) -> bool:
         with h5py.File(self.h5_path, 'r') as f:
-            key = f"{protein_id} nrPDB" if not self.is_pugo else protein_id
-            return key in f
+            return protein_id in f
 
 class PFresGODataset(Dataset):
     protein_ids: List[str]
@@ -94,32 +92,31 @@ class PFresGODataset(Dataset):
 
         # Get GO terms list
         if order_go_terms and subontology != 'all':
-            # Map subontology to short form
-            sub_map = {
-                'molecular_function': 'MF',
-                'biological_process': 'BP',
-                'cellular_component': 'CC'
-            }
             self.go_term_list = self._generate_go_terms_bfs(
                 ontology_file,
-                sub_map[subontology]
+                subontology
             )
         else:
             # Original implementation
-            self.go_term_list = [
-                str(term.id) for term in ontology
-                if str(term[1].namespace) == self.subontology or self.subontology == 'all'
-            ]
+            if hasattr(self, 'go_term_list'):
+                logger.info(f"Using pre-existing GO term list of length {len(self.go_term_list)}")
+            else:
+                self.go_term_list = [
+                    str(term.id) for term in ontology
+                    if str(term[1].namespace) == self.subontology or self.subontology == 'all'
+                ]
 
         self.go_lookup_table = {go_term: i for i, go_term in enumerate(self.go_term_list)}
 
         if go_emb_file is not None:
             # Load GO embeddings
-            go_emb_dict = np.load(go_emb_file, allow_pickle=True).item()
+            go_emb_dict = {k.replace('_', ':'): v for k, v in np.load(go_emb_file, allow_pickle=True).item().items()} # compatibility with GO_0000000 format
 
             missing_terms = list(go_term for go_term in self.go_term_list if go_term not in go_emb_dict)
             if len(missing_terms) > 0:
                 logger.warning(f"{len(missing_terms)} GO term(s) {missing_terms[:3]}... not found in GO embeddings. Imputing with zero embeddings.")
+                if len(missing_terms) > 0.1 * len(self.go_term_list):
+                    logger.error(f"Aborting. More than 10% of all GO term(s) embeddings are missing. {len(missing_terms)}/{len(self.go_term_list)} not found in GO embeddings, please check the GO embeddings file.")
                 # raise ValueError(f"Aborting. GO term(s) {missing_terms} not found in GO embeddings, please check the GO embeddings file.")
 
             go_emb_dim = go_emb_dict[list(go_emb_dict.keys())[0]].shape[0]
@@ -130,6 +127,9 @@ class PFresGODataset(Dataset):
 
         # Load annotations
         self.annotations = self._load_annotations(annot_file)
+
+        # Calculate per-class priors from annotations
+        self.priors = np.mean(np.stack(list(self.annotations.values())), axis=0).astype(np.float32)
 
         # dict of protein -> residue embeddings
         self.residues = self._load_residue_embeddings(residue_emb_file)
@@ -194,7 +194,7 @@ class PFresGODataset(Dataset):
             go_embeddings=self.go_embeddings
         )
 
-    def _generate_go_terms_bfs(self, obo_file: Path, subontology: Literal['BP', 'MF', 'CC']) -> List[str]:
+    def _generate_go_terms_bfs(self, obo_file: Path, target_namespace: Literal['biological_process', 'molecular_function', 'cellular_component']) -> List[str]:
         """Generate GO terms in breadth-first order, including disconnected terms."""
         doc = fastobo.load(obo_file.open('rb'))
 
@@ -210,17 +210,11 @@ class PFresGODataset(Dataset):
 
         # Define roots and target namespace
         root_terms = {
-            "BP": "GO:0008150",
-            "MF": "GO:0003674",
-            "CC": "GO:0005575"
+            "biological_process": "GO:0008150",
+            "molecular_function": "GO:0003674",
+            "cellular_component": "GO:0005575"
         }
-        namespace_map = {
-            "BP": "biological_process",
-            "MF": "molecular_function",
-            "CC": "cellular_component"
-        }
-        target_namespace = namespace_map[subontology]
-        root_term_id = root_terms[subontology]
+        root_term_id = root_terms[target_namespace]
 
         # Build graph
         graph = nx.DiGraph()
@@ -263,7 +257,19 @@ class PFresGODataset(Dataset):
         # Add any remaining terms that weren't reached in BFS
         remaining_terms = all_terms - visited
         bfs_order.extend(sorted(remaining_terms))  # Add remaining terms in sorted order
-        logger.warning(f"Remaining terms: {len(remaining_terms)}")
+        logger.info(f"Out of graph terms: {len(remaining_terms)}. These are appended to the end of the GO term list.")
+
+        if hasattr(self, 'go_term_list'): # In the case of PUGO, we need to map the BFS order to the GO term list
+            logger.info(f"Ordering pre-existing GO term list of length {len(self.go_term_list)}")
+            existing_terms = set(self.go_term_list)
+            if not existing_terms.issubset(set(bfs_order)):
+                logger.warning(f"{len(existing_terms - set(bfs_order))} terms in the BFS order are not in the GO term list. This should not happen.")
+
+            dropped_terms = len(set(bfs_order) - existing_terms)
+            if dropped_terms > 0:
+                logger.info(f"{dropped_terms} terms have been dropped according to pre-existing GO term list.")
+
+            return [term for term in bfs_order if term in existing_terms]
 
         return bfs_order
 
@@ -276,6 +282,7 @@ class PUGODataset(PFresGODataset):
         ontology_file: Path,
         subontology: Literal['mf', 'bp', 'cc', 'all'],
         order_go_terms: bool = False,
+        annotations_column: str = "prop_annotations",
     ):
         """
         Args:
@@ -303,6 +310,8 @@ class PUGODataset(PFresGODataset):
         terms_df = pd.read_pickle(data_split_file.parent / "terms.pkl")
         self.go_term_list = terms_df['gos'].values.flatten()
 
+        self.annotations_column = annotations_column
+
         # Initialize parent class
         super().__init__(
             protein_ids=protein_ids,
@@ -315,7 +324,7 @@ class PUGODataset(PFresGODataset):
         )
 
     def _load_annotations(self, annot_file: Path) -> Dict[str, np.ndarray]:
-        """Override parent method to load annotations from PU-GO's pickle format"""
+        """Override parent method to load propagated annotations from PU-GO's pickle format"""
         protein_annots_map = {}
 
         for row in self.split_df.itertuples():
@@ -323,9 +332,10 @@ class PUGODataset(PFresGODataset):
             binary_vector = np.zeros(len(self.go_term_list))
 
             # Get propagated annotations if they exist
-            if hasattr(row, 'prop_annotations'):
-                annots = row.prop_annotations
+            if hasattr(row, self.annotations_column):
+                annots = getattr(row, self.annotations_column)
             else:
+                logger.error(f"No annotations found for protein {row.proteins}")
                 annots = []
 
             # Set annotations in binary vector
@@ -335,6 +345,7 @@ class PUGODataset(PFresGODataset):
 
             protein_annots_map[row.proteins] = binary_vector
 
+        logger.info(f"Using the column {self.annotations_column} for annotations")
         return protein_annots_map
 
     def _load_residue_embeddings(self, residue_emb_file: Path) -> LazyH5Dict:
@@ -363,7 +374,7 @@ class PFresGODataModule(pl.LightningDataModule):
             num_workers: Number of workers for dataloading
             ontology: Subontology to include
             go_release: GO release to use -- only used for downloading data
-            go_emb_file: GO embeddings file name in data directory -- DEPRECATED (not currently used -- it's looked up using go_release)
+            go_emb_file: GO embeddings file name in data directory
             protein_emb_file: Protein embeddings file name in data directory
             order_go_terms: Whether to order GO terms in breadth-first order
             train_go_embeddings: Whether to train the GO embeddings
@@ -382,45 +393,16 @@ class PFresGODataModule(pl.LightningDataModule):
         self.max_seq_length = max_seq_length
 
     def prepare_data(self):
-        return # implement better version later
-        # Create datasets
-
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-
-        # Download data if not present
-        if not (self.data_dir / "go.obo").exists():
-            wget.download(FIXED_GO_RELEASE_NEW if self.go_release == '2024' else FIXED_GO_RELEASE_OLD, out=str(self.data_dir))
-
-        # Download PFresGO data
-        wget.download(PFRESGO_DATA_URL + f"nrPDB-GO_2019.06.18_annot.tsv", out=str(self.data_dir / "annot.tsv"))
-        wget.download(PFRESGO_DATA_URL + f"nrPDB-GO_2019.06.18_test.txt", out=str(self.data_dir / "test.txt"))
-        wget.download(PFRESGO_DATA_URL + f"nrPDB-GO_2019.06.18_train.txt", out=str(self.data_dir / "train.txt"))
-        wget.download(PFRESGO_DATA_URL + f"nrPDB-GO_2019.06.18_valid.txt", out=str(self.data_dir / "valid.txt"))
-
-        # Residue embeddings & ontology embeddings should be downloaded by the user
-        if not (self.data_dir / self.protein_emb_file).exists():
-            print(f"WARNING: Residue embeddings not found in {self.data_dir}, please add them to the data directory")
-        if not (self.data_dir / self.go_emb_file).exists():
-            print(f"WARNING: GO embeddings not found in {self.data_dir}, please add them to the data directory")
-
-
+        # Use bin/download_data.py instead.
+        return
 
     def setup(self, stage: Optional[str] = None):
         # Define file paths
         residue_emb_file = self.data_dir / "per_residue_embeddings.h5"
 
-        if self.go_release.startswith('2020'):
-            ontology_file = self.data_dir / "2020-go.obo"
-        else:
-            ontology_file = self.data_dir / "go.obo"
+        ontology_file = self.data_dir / "go.obo"
 
-
-        if self.go_release == '2020':
-            go_emb_file = self.data_dir / "2020-ontology.embeddings.npy"
-        elif self.go_release == '2020-anc2vec': # this is to use the anc2vec embeddings
-            go_emb_file = self.data_dir / "2020-anc2vec-ontology.embeddings.npy"
-        else:
-            go_emb_file = self.data_dir / "ontology.embeddings.npy"
+        go_emb_file = self.data_dir / self.go_emb_file
 
         if self.train_go_embeddings:
             go_emb_file = None
@@ -428,12 +410,11 @@ class PFresGODataModule(pl.LightningDataModule):
         annot_file = self.data_dir / "annot.tsv"
 
         # Load protein IDs for each split
-        train_ids = self._load_protein_ids(self.data_dir / "train.txt")
-        val_ids = self._load_protein_ids(self.data_dir / "valid.txt")
-        test_ids = self._load_protein_ids(self.data_dir / "test.txt")
 
         # Create datasets
         if stage == "fit" or stage is None:
+            train_ids = self._load_protein_ids(self.data_dir / "train.txt")
+            val_ids = self._load_protein_ids(self.data_dir / "valid.txt")
             self.train_dataset = PFresGODataset(
                 train_ids, residue_emb_file, go_emb_file, ontology_file,
                 annot_file, self.ontology, self.order_go_terms
@@ -444,6 +425,7 @@ class PFresGODataModule(pl.LightningDataModule):
             )
 
         if stage == "test" or stage is None:
+            test_ids = self._load_protein_ids(self.data_dir / "test.txt")
             self.test_dataset = PFresGODataset(
                 test_ids, residue_emb_file, go_emb_file, ontology_file,
                 annot_file, self.ontology, self.order_go_terms
@@ -529,21 +511,25 @@ class PUGODataModule(PFresGODataModule):
         num_workers: int = 0,
         ontology: Literal['molecular_function', 'biological_process', 'cellular_component'] = 'biological_process',
         go_release: Literal['2020', '2024'] = '2024',
+        go_emb_file: str = "ontology.embeddings.npy",
         protein_emb_file: str = "per_residue_embeddings.h5",
         order_go_terms: bool = False,
         train_go_embeddings: bool = False,
         max_seq_length: int = DEFAULT_MAX_SEQ_LENGTH,
+        annotations_column: str = "prop_annotations",
     ):
+        self.annotations_column = annotations_column
         super().__init__(
             data_dir=data_dir,
             batch_size=batch_size,
             num_workers=num_workers,
             ontology=ontology,
             go_release=go_release,
+            go_emb_file=go_emb_file,
             protein_emb_file=protein_emb_file,
             order_go_terms=order_go_terms,
             train_go_embeddings=train_go_embeddings,
-            max_seq_length=max_seq_length
+            max_seq_length=max_seq_length,
         )
 
     def setup(self, stage: Optional[str] = None):
@@ -562,25 +548,31 @@ class PUGODataModule(PFresGODataModule):
             go_emb_file = None
         # we haven't performed ablation of go versions on other datasets (PUGO, NETGO)
         else:
-            go_emb_file = self.data_dir / f"{ontology_map[self.ontology]}/ontology.embeddings.npy"
+            go_emb_file = self.data_dir / self.go_emb_file
 
+        print(f"Using GO embeddings from: {go_emb_file}")
 
         # Create datasets
         if stage == "fit" or stage is None:
             self.train_dataset = PUGODataset(
                 self.data_dir / ontology_map[self.ontology] / "train_data.pkl",
                 residue_emb_file, go_emb_file, ontology_file,
-                ontology_map[self.ontology], self.order_go_terms
+                ontology_map[self.ontology], self.order_go_terms, self.annotations_column
             )
             self.val_dataset = PUGODataset(
                 self.data_dir / ontology_map[self.ontology] / "valid_data.pkl",
                 residue_emb_file, go_emb_file, ontology_file,
-                ontology_map[self.ontology], self.order_go_terms
+                ontology_map[self.ontology], self.order_go_terms, self.annotations_column
             )
 
         if stage == "test" or stage is None:
+            if self.data_dir.name == "pugo":
+                test_filename = "time_data_esm.pkl"
+            else:
+                test_filename = "test_data.pkl"
+
             self.test_dataset = PUGODataset(
-                self.data_dir / ontology_map[self.ontology] / "test_data.pkl",
+                self.data_dir / ontology_map[self.ontology] / test_filename,
                 residue_emb_file, go_emb_file, ontology_file,
-                ontology_map[self.ontology], self.order_go_terms
+                ontology_map[self.ontology], self.order_go_terms, annotations_column="prop_annotations" # for test, we don't use filtered annotations
             )

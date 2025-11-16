@@ -56,6 +56,10 @@ class TrainConfig(BaseModel):
     )
 
     # Training hyperparameters
+    loss_fn: str = Field(
+        default="bce",
+        description="Loss function to use, either 'bce' or 'pu' (positive-unlabeled) or 'pu_ranking' (positive-unlabeled with ranking loss)"
+    )
     batch_size: int
     learning_rate: float
     weight_decay: float
@@ -68,7 +72,11 @@ class TrainConfig(BaseModel):
         default=1,
         description="Number of batches to accumulate gradients over"
     )
-    wandb_run_name: str = Field("contempro-unnamed-run", description="Name of the W&B run")
+    wandb_run_name: str = Field("stargo-unnamed-run", description="Name of the W&B run")
+    annotations_column: str = Field(
+        default="prop_annotations",
+        description="Column name of the annotations to use"
+    )
 
 class Config(BaseModel):
     model: Union[BertModelConfig, MLPModelConfig] = Field(discriminator='name')

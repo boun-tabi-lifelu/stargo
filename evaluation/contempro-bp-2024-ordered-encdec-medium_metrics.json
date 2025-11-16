@@ -1,7 +1,0 @@
-{
-  "Micro AUPR": 0.33478515062942016,
-  "Macro AUPR": 0.2952365711323024,
-  "AUC": 0.9871674406197397,
-  "Fmax": 0.5486605741053667,
-  "model": "contempro-bp-2024-ordered-encdec-medium"
-}

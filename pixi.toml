@@ -1,8 +1,8 @@
 [project]
 authors = ["Mehmet Efe Akça <efeakca@gmail.com>"]
 channels = ["conda-forge"]
-description = "CONTEMPRO model"
-name = "contempro"
+description = "star-go model"
+name = "stargo"
 platforms = ["osx-arm64"]
 version = "0.1.0"
 

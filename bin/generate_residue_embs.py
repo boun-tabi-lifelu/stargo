@@ -4,6 +4,13 @@ Generate ProtT5 embeddings for protein sequences
 A significant amount of the code is adapted from the PFresGO codebase (https://github.com/BioColLab/PFresGO/blob/43d7abe4752a1cf8afb22cc41b349379e6018284/fasta-embedding.py)
 """
 import os
+# Set environment variables before importing any deep learning libraries
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow warnings
+os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
+# Prevent TensorFlow from being loaded by transformers
+os.environ['USE_TF'] = '0'
+os.environ['USE_TORCH'] = '1'
+
 from pathlib import Path
 import pandas as pd
 import argparse
@@ -15,12 +22,12 @@ from tqdm import tqdm
 import wandb
 import sys
 
-MAX_SEQ_LENGTH = 1024 # this is the max sequence length for the downstream CONTEMPRO model, we don't need to save the embeddings after this length
+MAX_SEQ_LENGTH = 1024 # this is the max sequence length for the downstream STARGO model, we don't need to save the embeddings after this length
 # note that the ProtT5 model is given up to 4000 residues to enable the extraction of more information from the protein sequence
 
 try:
   from IPython.core import ultratb
-  sys.excepthook = ultratb.FormattedTB(color_scheme='Linux', call_pdb=1)
+  sys.excepthook = ultratb.FormattedTB(mode='Plain', call_pdb=1)
 except ImportError:
   print("IPython not found, using default exception hook")
   def info(type, value, tb):
@@ -64,6 +71,11 @@ def generate_and_save_embs(model, tokenizer, seqs, output_file, max_residues=400
     with h5py.File(str(output_file), "a") as hf:
         with tqdm(total=len(seq_dict), desc="Generating embeddings") as pbar:
             for seq_idx, (prot_id, seq) in enumerate(seq_dict, 1):
+                # Truncate sequence if longer than 4000
+                if len(seq) > 4000:
+                    print(f"Truncating {prot_id} from {len(seq)} to 4000 residues")
+                    seq = seq[:4000]
+
                 # Skip if protein already processed and not the last sequence in the dataset with nonempty batch
                 if prot_id in hf:
                     pbar.update(1)
@@ -72,15 +84,9 @@ def generate_and_save_embs(model, tokenizer, seqs, output_file, max_residues=400
                 else:
                     # if the protein is not in the h5 file, we need to add it to the batch
                     seq_len = len(seq)
+                    # ProtT5 requires spaces between amino acids
                     seq = ' '.join(list(seq))
                     batch.append((prot_id, seq, seq_len))
-
-
-                # Truncate sequence if longer than 4000
-                if len(seq) > 4000:
-                    print(f"Truncating {prot_id} from {len(seq)} to 4000 residues")
-                    seq = seq[:4000]
-
 
                 n_res_batch = sum([s_len for _, _, s_len in batch])
                 # Process batch if any of these conditions are met:
@@ -108,21 +114,20 @@ def generate_and_save_embs(model, tokenizer, seqs, output_file, max_residues=400
                     input_ids = torch.tensor(token_encoding['input_ids']).to(device)
                     attention_mask = torch.tensor(token_encoding['attention_mask']).to(device)
 
-                    try:
-                        # Generate embeddings without gradients
-                        with torch.no_grad():
-                            embedding_repr = model(input_ids, attention_mask=attention_mask)
-                    except RuntimeError:
-                        # Debug on error
-                        import ipdb
-                        ipdb.post_mortem()
-                        print(f"RuntimeError during embedding for {prot_id} (L={seq_len})")
-                        continue
+
+                    with torch.no_grad():
+                        embedding_repr = model(input_ids, attention_mask=attention_mask)
+
 
                     # Process and save each embedding in batch
                     for batch_idx, identifier in enumerate(prot_ids):
-                        # Get embedding and truncate to max sequence length
-                        emb = embedding_repr.last_hidden_state[batch_idx, :MAX_SEQ_LENGTH]
+                        # Get actual sequence length for this protein
+                        seq_len = seq_lens[batch_idx]
+
+                        # Truncate to min of actual length or MAX_SEQ_LENGTH
+                        # Note: We take up to seq_len positions (but no more than MAX_SEQ_LENGTH)
+                        actual_len = min(seq_len, MAX_SEQ_LENGTH)
+                        emb = embedding_repr.last_hidden_state[batch_idx, :actual_len]
 
                         # Save to HDF5 file
                         hf.create_dataset(
@@ -147,38 +152,75 @@ def save_embeddings(emb_dict, out_path):
 
 def load_pugo_data(data_dir: Path, ontology: str) -> dict:
     """Load sequences from PU-GO dataset"""
-    ont_dir = data_dir / ontology
-    train_df = pd.read_pickle(ont_dir / "train_data.pkl")
-    valid_df = pd.read_pickle(ont_dir / "valid_data.pkl")
-    test_df = pd.read_pickle(ont_dir / "test_data.pkl")
+    if ontology == "all":
+        ontologies = ["bp", "mf", "cc"]
+    else:
+        ontologies = [ontology]
 
     all_seqs = {}
-    for df in [train_df, valid_df, test_df]:
-        for row in df.itertuples(index=True):
-            all_seqs[row.proteins] = row.sequences
+    for ont in ontologies:
+        ont_dir = data_dir / ont
+        train_df = pd.read_pickle(ont_dir / "train_data.pkl")
+        valid_df = pd.read_pickle(ont_dir / "valid_data.pkl")
+        test_df = pd.read_pickle(ont_dir / "test_data.pkl")
+
+        for df in [train_df, valid_df, test_df]:
+            for row in df.itertuples(index=True):
+                all_seqs[row.proteins] = row.sequences
 
     return all_seqs
 
 def load_pfresgo_data(data_dir: Path, ontology: str) -> dict:
-    """Load sequences from PFresGO dataset"""
-    # Map short ontology names to PFresGO format
-    ont_map = {
-        'mf': 'molecular_function',
-        'bp': 'biological_process',
-        'cc': 'cellular_component'
-    }
-    ont_name = ont_map.get(ontology, ontology)
+    """Load sequences from PFresGO dataset
 
-    splits = ['train', 'valid', 'test']
+    PFresGO has a flat structure with:
+    - nrPDB-GO_2019.06.18_sequences.fasta: all protein sequences
+    - train.txt, valid.txt, test.txt: protein IDs for each split
+    - annot.tsv: annotations
+    """
+    # First, load all sequences from FASTA file
+    fasta_path = data_dir / "nrPDB-GO_2019.06.18_sequences.fasta"
     all_seqs = {}
 
-    for split in splits:
-        tsv_path = data_dir / ont_name / f"{split}.tsv"
-        df = pd.read_csv(tsv_path, sep='\t')
-        for _, row in df.iterrows():
-            all_seqs[row['protein_id']] = row['sequence']
+    with open(fasta_path, 'r') as f:
+        current_id = None
+        current_seq = []
 
-    return all_seqs
+        for line in f:
+            line = line.strip()
+            if line.startswith('>'):
+                # Save previous sequence if exists
+                if current_id is not None:
+                    all_seqs[current_id] = ''.join(current_seq)
+
+                # Extract protein ID (first field after >)
+                current_id = line[1:].split()[0]
+                current_seq = []
+            else:
+                # repl. all whie-space chars and join seqs spanning multiple lines, drop gaps and cast to upper-case
+                seq = ''.join(line.split()).upper().replace("-", "")
+                # repl. all non-standard AAs and map them to unknown/X
+                seq = seq.replace('U', 'X').replace('Z', 'X').replace('O', 'X')
+                current_seq.append(seq)
+
+        # Save last sequence
+        if current_id is not None:
+            all_seqs[current_id] = ''.join(current_seq)
+
+    # Now filter to only include sequences in train/valid/test splits
+    split_ids = set()
+    for split in ['train', 'valid', 'test']:
+        split_file = data_dir / f"{split}.txt"
+        with open(split_file, 'r') as f:
+            for line in f:
+                prot_id = line.strip()
+                if prot_id:
+                    split_ids.add(prot_id)
+
+    # Filter sequences to only those in the splits
+    filtered_seqs = {prot_id: seq for prot_id, seq in all_seqs.items() if prot_id in split_ids}
+
+    return filtered_seqs
 
 def main():
     parser = argparse.ArgumentParser(description='Generate ProtT5 embeddings for protein sequences')
@@ -203,11 +245,15 @@ def main():
 
     # Initialize wandb if enabled
     if not args.no_wandb:
-        wandb.init(
-            project=args.wandb_project,
-            entity=args.wandb_entity,
-            config=vars(args)
-        )
+        try:
+            wandb.init(
+                project=args.wandb_project,
+                entity=args.wandb_entity,
+                config=vars(args)
+            )
+        except Exception as e:
+            print(f"[WARNING] Failed to initialize wandb: {e}")
+            print("[WARNING] Continuing without wandb logging...")
 
     data_dir = Path(args.data_dir)
 

@@ -1,0 +1,7 @@
+{
+  "Micro AUPR": 0.31373894796374674,
+  "Macro AUPR": 0.25749835714031477,
+  "AUC": 0.9789111600527716,
+  "Fmax": 0.602063045333491,
+  "model": "stargo-cc-2020-ordered-encdec-medium-pu-ranking-priors"
+}

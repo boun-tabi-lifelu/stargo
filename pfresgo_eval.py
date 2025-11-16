@@ -100,8 +100,10 @@ class Method(object):
         AvgRc_list = []
         thresh_list = []
 
-        for t in trange(1, 100):
-            threshold = t / 100.0
+        thresholds = np.linspace(0.0, 0.99, num=100, dtype=np.float32)
+
+        for idx in trange(len(thresholds)):
+            threshold = float(thresholds[idx])
             predictions = (preds > threshold).astype(int)
 
             m = 0
@@ -135,6 +137,25 @@ class Method(object):
                     AvgPr_list.append(AvgPr)
                     AvgRc_list.append(AvgRc)
                     thresh_list.append(threshold)
+
+
+        if len(F_list) == 0:
+            pred_min = float(preds.min())
+            pred_max = float(preds.max())
+            pred_mean = float(preds.mean())
+            pred_std = float(preds.std())
+            positive_labels = int(labels.sum())
+            raise ValueError(
+                "PFresGO Fmax calculation failed: no valid thresholds produced any "
+                "predictions with both precision and recall defined.\n"
+                f"Proteins evaluated: {n}, GO terms: {labels.shape[1]}, "
+                f"positive labels: {positive_labels}.\n"
+                f"Prediction stats -> min: {pred_min:.3e}, mean: {pred_mean:.3e}, "
+                f"max: {pred_max:.3e}, std: {pred_std:.3e}.\n"
+                "This typically means the prediction tensor is almost constant (all "
+                "near-zero or near-one) or the provided labels contain no positives "
+                "for the selected protein subset."
+            )
 
         F_list = np.asarray(F_list)
         AvgPr_list = np.asarray(AvgPr_list)

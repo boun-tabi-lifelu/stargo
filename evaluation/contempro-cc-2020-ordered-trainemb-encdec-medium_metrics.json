@@ -1,7 +1,0 @@
-{
-  "Micro AUPR": 0.4566201041435137,
-  "Macro AUPR": 0.37787875243559144,
-  "AUC": 0.9881739357082596,
-  "Fmax": 0.6575682320472815,
-  "model": "contempro-cc-2020-ordered-trainemb-encdec-medium"
-}

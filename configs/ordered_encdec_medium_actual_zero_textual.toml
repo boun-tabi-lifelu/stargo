@@ -1,10 +1,11 @@
 [train]
 # Data paths and configuration
-data_dir = "datasets/pfresgo"
-go_embed_file = "ontology.embeddings.npy"
+data_dir = "datasets/deepgozero"
+go_embed_file = "ontology.sbert-embeddings.npy"
 protein_embed_file = "per_residue_embeddings.h5"
-subontology = "cellular_component"
-go_release = "2020"
+subontology = "cellular_component" # overridden in train.py CLI calls
+go_release = "2020" # overridden in train.py CLI calls
+order_go_terms = true
 
 # Compute settings
 use_tpu = false
@@ -18,13 +19,14 @@ learning_rate = 6e-5
 weight_decay = 0.01
 max_epochs = 100
 gradient_accumulation = 4
-early_stopping = 10
-wandb_run_name = "encoder-medium"
+
+# defaults to prop_annotations
+annotations_column = "actual_zero_annotations"
 
 [model]
 # Model type
 name = "bert"
-decoder = false
+decoder = true
 
 # Architecture configuration
 hidden_dim = 256
@@ -34,7 +36,7 @@ num_decoder_layers = 6
 num_attention_heads = 8
 
 # Input dimensions
-go_input_dim = 200
+go_input_dim = 768
 seq_input_dim = 1024
 
 # Regularization and activation
