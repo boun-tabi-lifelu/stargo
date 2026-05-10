@@ -1,5 +1,5 @@
 # STAR-GO: Improving Protein Function Prediction by Learning to Hierarchically Integrate Ontology-Informed Semantic Embeddings
-> **Paper**: [Read the preprint on arXiv](https://arxiv.org/pdf/2512.05245)
+> **Paper**: [STAR-GO: improving protein function prediction by learning to hierarchically integrate ontology-informed semantic embeddings](https://academic.oup.com/bioinformatics/article/42/4/btag146/8540457)
 
 ## Prerequisites
 
